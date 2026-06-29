@@ -25,7 +25,7 @@ class CsvDataServiceTest {
         List<String> suggestions = service.getGuidanceSuggestions();
 
         assertFalse(suggestions.isEmpty());
-        assertTrue(suggestions.stream().anyMatch(suggestion -> suggestion.contains("African")));
+        assertTrue(suggestions.stream().anyMatch(suggestion -> suggestion.contains("highest") || suggestion.contains("lowest") || suggestion.contains("Latino") || suggestion.contains("Asian")));
     }
 
     @Test
@@ -37,6 +37,14 @@ class CsvDataServiceTest {
         assertTrue(results.stream().noneMatch(record ->
                 record.estimate() == null || record.estimate().isBlank() || record.estimate().equalsIgnoreCase("NA")
         ));
+    }
+
+    @Test
+    void providesAClearPlainLanguageSummaryFromTheDataDictionary() {
+        String summary = service.getIndicatorSummary();
+
+        assertFalse(summary.isBlank());
+        assertTrue(summary.contains("college") || summary.contains("degree"));
     }
 
     @Test

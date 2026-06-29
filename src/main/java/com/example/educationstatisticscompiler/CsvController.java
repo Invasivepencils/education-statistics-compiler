@@ -33,6 +33,7 @@ public class CsvController {
         model.addAttribute("sortOrder", sortOrder == null ? "highest" : sortOrder);
         model.addAttribute("results", results);
         model.addAttribute("guidance", csvDataService.getGuidanceSuggestions());
+        model.addAttribute("indicatorSummary", csvDataService.getIndicatorSummary());
 
         Map<String, String> explanation = new HashMap<>();
         explanation.put("title", "Education data explorer");

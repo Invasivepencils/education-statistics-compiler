@@ -21,8 +21,10 @@ import org.springframework.stereotype.Service;
 public class CsvDataService {
 
     private final List<CsvRecord> records;
+    private final Map<String, String> dictionaryDefinitions;
 
     public CsvDataService() {
+        this.dictionaryDefinitions = loadDictionaryDefinitions();
         this.records = loadRecords();
     }
 
@@ -93,11 +95,19 @@ public class CsvDataService {
 
     public List<String> getGuidanceSuggestions() {
         return List.of(
-                "Try: 'African American in Los Angeles County'",
-                "Try: 'White in San Diego County'",
-                "Try: 'Asian in California'",
-                "Try: 'Latino in Fresno County'"
+                "Try: highest college-degree rates for Los Angeles",
+                "Try: lowest rates in the Bay Area",
+                "Try: Asian residents across California",
+                "Try: Latino rates by region"
         );
+    }
+
+    public String getIndicatorSummary() {
+        String definition = dictionaryDefinitions.getOrDefault("ind_definition", "");
+        if (definition.isBlank()) {
+            return "This dataset shows the share of adults age 25 and up with a four-year college degree or higher.";
+        }
+        return definition + " This is a percentage-based measure, so higher values mean a larger share of adults in that place have a college degree.";
     }
 
     private boolean matchesQuery(CsvRecord record, String[] terms) {
@@ -247,6 +257,34 @@ public class CsvDataService {
 
     private boolean isStopWord(String term) {
         return Set.of("in", "the", "and", "for", "with", "of", "a", "an").contains(term);
+    }
+
+    private Map<String, String> loadDictionaryDefinitions() {
+        Map<String, String> definitions = new HashMap<>();
+        try {
+            ClassPathResource resource = new ClassPathResource("datadictionary.csv");
+            try (InputStream inputStream = resource.getInputStream();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+                String line;
+                boolean headerSkipped = false;
+                while ((line = reader.readLine()) != null) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    if (!headerSkipped) {
+                        headerSkipped = true;
+                        continue;
+                    }
+                    String[] parts = splitCsvLine(line);
+                    if (parts.length >= 2) {
+                        definitions.put(parts[0].trim(), parts[1].trim());
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to load data dictionary", e);
+        }
+        return definitions;
     }
 
     private List<CsvRecord> loadRecords() {
