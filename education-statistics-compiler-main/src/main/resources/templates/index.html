@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Education Data Explorer</title>
+    <style>
+        :root {
+            --bg: #f5f7fb;
+            --text: #1f2937;
+            --muted: #64748b;
+            --panel: #ffffff;
+            --accent: #0f766e;
+            --accent-dark: #0f4c81;
+            --highlight: #ecfdf5;
+            --border: #e2e8f0;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+
+        .page {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 2rem 1rem 3rem;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, var(--accent-dark), #2563eb);
+            color: white;
+            padding: 2rem;
+            border-radius: 16px;
+        }
+
+        .hero p { margin-bottom: 0; opacity: 0.95; }
+
+        .panel {
+            background: var(--panel);
+            border-radius: 14px;
+            padding: 1.25rem 1.5rem;
+            margin-top: 1rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+        }
+
+        .search-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            align-items: end;
+        }
+
+        label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+        }
+
+        select,
+        input[type="text"] {
+            width: 100%;
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+            font-size: 1rem;
+            background: white;
+        }
+
+        .actions {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 0.8rem 1.2rem;
+            border: none;
+            background: var(--accent);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        button.secondary {
+            background: #e2e8f0;
+            color: var(--text);
+        }
+
+        .muted { color: var(--muted); }
+
+        .suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .pill {
+            background: #e2e8f0;
+            padding: 0.4rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.92rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            background: #f8fafc;
+            font-size: 0.92rem;
+        }
+
+        .rank {
+            font-weight: 700;
+            color: var(--accent-dark);
+            width: 3rem;
+        }
+
+        .estimate {
+            font-weight: 700;
+            font-size: 1.05rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            background: #ecfeff;
+            color: var(--accent);
+            font-size: 0.85rem;
+        }
+
+        .highlight-row {
+            background: var(--highlight);
+        }
+
+        .section-note {
+            margin-top: 0.5rem;
+            font-size: 0.95rem;
+        }
+
+        .city-panel h3 {
+            margin-top: 0;
+        }
+
+        @media (max-width: 640px) {
+            .hero { padding: 1.5rem; }
+            .panel { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <section class="hero">
+        <h1>Education Data Explorer</h1>
+        <p>Explore California education rates by county, region, or city. Every result uses plain place names — not FIPS codes — and is ranked from highest to lowest so you can spot standout areas quickly.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Search the data</h2>
+        <p class="muted">Pick an area and race group, or search for your city to compare it with other communities in the same county.</p>
+
+        <form method="get" action="/">
+            <div class="search-grid">
+                <div>
+                    <label for="location">Area / location</label>
+                    <select id="location" name="location">
+                        <option th:each="option : ${locationOptions}"
+                                th:value="${option.value()}"
+                                th:text="${option.group() + ' — ' + option.label()}"
+                                th:selected="${location == option.value()}">
+                        </option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="race">Race / ethnicity</label>
+                    <select id="race" name="race">
+                        <option th:each="option : ${raceOptions}"
+                                th:value="${#strings.substringBefore(option, '|')}"
+                                th:text="${#strings.substringAfter(option, '|')}"
+                                th:selected="${race == #strings.substringBefore(option, '|')}">
+                        </option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="city">Search by city or neighborhood</label>
+                    <input id="city" type="text" name="city" th:value="${city}" placeholder="e.g. Pomona, Oakland, Fresno"/>
+                </div>
+
+                <div class="actions">
+                    <button type="submit">Show results</button>
+                    <button type="button" class="secondary" onclick="window.location.href='/'">Clear</button>
+                </div>
+            </div>
+        </form>
+
+        <div class="suggestions">
+            <span class="pill" th:each="tip : ${guidance}">[[${tip}]]</span>
+        </div>
+    </section>
+
+    <section class="panel city-panel" th:if="${citySearch.found()}">
+        <h2>Your city and nearby areas</h2>
+        <p class="section-note muted">
+            Showing <strong th:text="${citySearch.matchedPlace().displayLocation()}">City</strong>
+            in <strong th:text="${citySearch.countyName() + ' County'}">County</strong>
+            (<span th:text="${citySearch.regionName()}">Region</span>), compared with other communities in the same county.
+        </p>
+
+        <table>
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>Place</th>
+                <th>Race / group</th>
+                <th>College degree rate</th>
+                <th>Reporting period</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr class="highlight-row">
+                <td class="rank" th:text="${citySearch.matchedPlace().rank()}">1</td>
+                <td>
+                    <strong th:text="${citySearch.matchedPlace().displayLocation()}">City</strong><br/>
+                    <span class="muted" th:text="${citySearch.matchedPlace().displayContext()}">Context</span>
+                    <span class="badge">Your match</span>
+                </td>
+                <td th:text="${citySearch.matchedPlace().raceEthName()}">Race</td>
+                <td class="estimate" th:text="${citySearch.matchedPlace().estimate() + '%'}">Rate</td>
+                <td th:text="${citySearch.matchedPlace().reportYear()}">Year</td>
+            </tr>
+            <tr th:each="row : ${citySearch.nearbyPlaces()}">
+                <td class="rank" th:text="${row.rank()}">#</td>
+                <td>
+                    <strong th:text="${row.displayLocation()}">Place</strong><br/>
+                    <span class="muted" th:text="${row.displayContext()}">Context</span>
+                </td>
+                <td th:text="${row.raceEthName()}">Race</td>
+                <td class="estimate" th:text="${row.estimate() + '%'}">Rate</td>
+                <td th:text="${row.reportYear()}">Year</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="panel city-panel" th:if="${!#strings.isEmpty(city) and !citySearch.found()}">
+        <h2>City search</h2>
+        <p class="muted">No city or community matched "<span th:text="${city}">city</span>". Try the official place name from the census, such as "Pomona" or "West Hollywood".</p>
+    </section>
+
+    <section class="panel">
+        <h2>What the results mean</h2>
+        <p class="muted" th:text="${indicatorSummary}">Indicator summary</p>
+    </section>
+
+    <section class="panel">
+        <h2>Ranked results</h2>
+        <p class="muted section-note">Sorted from highest to lowest college-degree rate for your selected filters.</p>
+        <p class="muted" th:if="${results.isEmpty()}">No matches were found. Try a broader area such as a full county or choose "All races".</p>
+
+        <table th:if="${!results.isEmpty()}">
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>Place</th>
+                <th>Race / group</th>
+                <th>College degree rate</th>
+                <th>Reporting period</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="row : ${results}" th:classappend="${row.highlighted()} ? 'highlight-row' : ''">
+                <td class="rank" th:text="${row.rank()}">#</td>
+                <td>
+                    <strong th:text="${row.displayLocation()}">Name</strong><br/>
+                    <span class="muted" th:text="${row.displayContext()}">Context</span>
+                </td>
+                <td th:text="${row.raceEthName()}">Race</td>
+                <td class="estimate" th:text="${row.estimate() + '%'}">Estimate</td>
+                <td th:text="${row.reportYear()}">Year</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</div>
+</body>
+</html>
