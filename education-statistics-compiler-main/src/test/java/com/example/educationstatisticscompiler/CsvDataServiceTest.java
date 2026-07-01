@@ -42,13 +42,31 @@ class CsvDataServiceTest {
 
     @Test
     void searchByCityFindsPlaceAndNearbyCountyCommunities() {
-        CitySearchResult result = service.searchByCity("Pomona", "all", 5);
+        CitySearchResult result = service.searchByCity("Pomona", "all", "2011-2015", 5);
 
         assertTrue(result.found());
         assertTrue(result.matchedPlace().displayLocation().contains("Pomona"));
         assertFalse(result.nearbyPlaces().isEmpty());
         assertTrue(result.nearbyPlaces().stream()
                 .allMatch(row -> row.displayContext().contains("Los Angeles County")));
+        assertTrue(result.matchedPlace().reportYear().equals("2011-2015"));
+        assertTrue(result.nearbyPlaces().stream().allMatch(row -> "2011-2015".equals(row.reportYear())));
+    }
+
+    @Test
+    void filtersResultsToSingleReportPeriod() {
+        List<ResultRow> results = service.searchByFilters("region:Bay Area", "all", "2006-2010", 10);
+
+        assertFalse(results.isEmpty());
+        assertTrue(results.stream().allMatch(row -> "2006-2010".equals(row.reportYear())));
+    }
+
+    @Test
+    void defaultsTo2006To2010WhenNoPeriodSelected() {
+        List<ResultRow> results = service.searchByFilters("state", "all", "", 10);
+
+        assertFalse(results.isEmpty());
+        assertTrue(results.stream().allMatch(row -> "2006-2010".equals(row.reportYear())));
     }
 
     @Test

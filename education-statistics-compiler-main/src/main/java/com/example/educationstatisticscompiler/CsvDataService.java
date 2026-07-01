@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,14 +49,19 @@ public class CsvDataService {
             Map.entry("14", "Southern California")
     );
 
+    private static final String DEFAULT_REPORT_PERIOD = "2006-2010";
+    private static final List<String> KNOWN_REPORT_PERIODS = List.of("2011-2015", "2006-2010", "2000");
+
     private final List<CsvRecord> records;
     private final Map<String, String> dictionaryDefinitions;
     private final List<LocationOption> locationOptions;
+    private final List<ReportPeriodOption> reportPeriodOptions;
 
     public CsvDataService() {
         this.dictionaryDefinitions = loadDictionaryDefinitions();
         this.records = loadRecords();
         this.locationOptions = buildLocationOptions();
+        this.reportPeriodOptions = buildReportPeriodOptions();
     }
 
     public List<CsvRecord> search(String query) {
@@ -70,7 +76,7 @@ public class CsvDataService {
         return records.stream()
                 .filter(record -> matchesQuery(record, terms))
                 .sorted(Comparator.comparingInt((CsvRecord record) -> scoreRecord(record, terms)).reversed()
-                        .thenComparing(this::estimateAsDouble, Comparator.reverseOrder()))
+                        .thenComparing((CsvRecord record) -> estimateAsDouble(record), Comparator.reverseOrder()))
                 .limit(50)
                 .toList();
     }
@@ -89,19 +95,20 @@ public class CsvDataService {
                 .toList();
     }
 
-    public List<ResultRow> searchByFilters(String location, String race, int limit) {
-        return toResultRows(filterRecords(location, race, limit), null);
+    public List<ResultRow> searchByFilters(String location, String race, String period, int limit) {
+        return toResultRows(filterRecords(location, race, period, limit), null);
     }
 
     public List<CsvRecord> searchByFilters(String scope, String location, String race, String sortOrder, int limit) {
-        return filterRecords(resolveLegacyLocation(scope, location), race, limit);
+        return filterRecords(resolveLegacyLocation(scope, location), race, DEFAULT_REPORT_PERIOD, limit);
     }
 
-    private List<CsvRecord> filterRecords(String location, String race, int limit) {
+    private List<CsvRecord> filterRecords(String location, String race, String period, int limit) {
         return records.stream()
                 .filter(this::hasMeaningfulEstimate)
                 .filter(record -> matchesLocationFilter(record, location))
                 .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
                 .sorted(byEstimateHighestFirst())
                 .limit(limit)
                 .toList();
@@ -124,7 +131,7 @@ public class CsvDataService {
         return location.contains(":") ? location : "county:" + location.trim();
     }
 
-    public CitySearchResult searchByCity(String cityQuery, String race, int nearbyLimit) {
+    public CitySearchResult searchByCity(String cityQuery, String race, String period, int nearbyLimit) {
         String normalizedCity = normalize(cityQuery);
         if (normalizedCity == null || normalizedCity.isBlank()) {
             return CitySearchResult.empty();
@@ -134,9 +141,10 @@ public class CsvDataService {
                 .filter(this::hasMeaningfulEstimate)
                 .filter(record -> "PL".equalsIgnoreCase(record.geotype()))
                 .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
                 .filter(record -> matchesCityName(record, normalizedCity))
                 .sorted(Comparator.comparingInt((CsvRecord record) -> cityMatchScore(record, normalizedCity)).reversed()
-                        .thenComparing(this::estimateAsDouble, Comparator.reverseOrder()))
+                        .thenComparing((CsvRecord record) -> estimateAsDouble(record), Comparator.reverseOrder()))
                 .toList();
 
         if (cityMatches.isEmpty()) {
@@ -150,6 +158,7 @@ public class CsvDataService {
                 .filter(this::hasMeaningfulEstimate)
                 .filter(record -> "PL".equalsIgnoreCase(record.geotype()))
                 .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
                 .filter(record -> !record.geotypeValue().equals(primary.geotypeValue()))
                 .filter(record -> county.equalsIgnoreCase(record.countyName()))
                 .sorted(byEstimateHighestFirst())
@@ -184,6 +193,23 @@ public class CsvDataService {
                 "aian|American Indian or Alaska Native",
                 "nhopi|Native Hawaiian or Pacific Islander"
         );
+    }
+
+    public List<ReportPeriodOption> getReportPeriodOptions() {
+        return reportPeriodOptions;
+    }
+
+    public String getDefaultReportPeriod() {
+        return DEFAULT_REPORT_PERIOD;
+    }
+
+    public String formatReportPeriodLabel(String period) {
+        return switch (period) {
+            case "2000" -> "2000 (Decennial Census)";
+            case "2006-2010" -> "2006–2010 (ACS 5-year average)";
+            case "2011-2015" -> "2011–2015 (ACS 5-year average)";
+            default -> period;
+        };
     }
 
     public String getDisplayLocation(CsvRecord record) {
@@ -243,10 +269,10 @@ public class CsvDataService {
 
     public List<String> getGuidanceSuggestions() {
         return List.of(
+                "Pick one reporting period to compare areas fairly",
                 "Search by city: try Pomona, Fresno, or Oakland",
                 "Compare counties in the Bay Area region",
-                "View Latino education rates across California",
-                "Pick Los Angeles County to rank local cities"
+                "View Latino education rates for 2011–2015"
         );
     }
 
@@ -304,6 +330,24 @@ public class CsvDataService {
         }
 
         return options;
+    }
+
+    private List<ReportPeriodOption> buildReportPeriodOptions() {
+        LinkedHashSet<String> periods = new LinkedHashSet<>(KNOWN_REPORT_PERIODS);
+        records.stream()
+                .map(CsvRecord::reportYear)
+                .filter(year -> year != null && !year.isBlank() && !year.equalsIgnoreCase("NA"))
+                .forEach(periods::add);
+
+        return periods.stream()
+                .sorted(Comparator.reverseOrder())
+                .map(period -> new ReportPeriodOption(period, formatReportPeriodLabel(period)))
+                .toList();
+    }
+
+    private boolean matchesReportPeriodFilter(CsvRecord record, String period) {
+        String effectivePeriod = (period == null || period.isBlank()) ? DEFAULT_REPORT_PERIOD : period.trim();
+        return effectivePeriod.equalsIgnoreCase(safe(record.reportYear()));
     }
 
     private boolean matchesLocationFilter(CsvRecord record, String location) {
@@ -409,7 +453,7 @@ public class CsvDataService {
     }
 
     private Comparator<CsvRecord> byEstimateHighestFirst() {
-        return Comparator.comparingDouble(this::estimateAsDouble).reversed();
+        return Comparator.comparingDouble((CsvRecord record) -> estimateAsDouble(record)).reversed();
     }
 
     private double estimateAsDouble(CsvRecord record) {
@@ -570,8 +614,11 @@ public class CsvDataService {
                         continue;
                     }
                     String[] parts = splitCsvLine(line);
-                    if (parts.length >= 2) {
-                        definitions.put(parts[0].trim(), parts[1].trim());
+                    if (parts.length >= 2 && !parts[0].trim().startsWith("NOTE")) {
+                        String value = parts.length >= 4 && !parts[3].trim().isBlank()
+                                ? parts[3].trim()
+                                : parts[1].trim();
+                        definitions.put(parts[0].trim(), value);
                     }
                 }
             }

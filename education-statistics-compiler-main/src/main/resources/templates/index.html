@@ -177,7 +177,7 @@
 
     <section class="panel">
         <h2>Search the data</h2>
-        <p class="muted">Pick an area and race group, or search for your city to compare it with other communities in the same county.</p>
+        <p class="muted">Pick an area, race group, and reporting period so all results use the same years of data.</p>
 
         <form method="get" action="/">
             <div class="search-grid">
@@ -188,6 +188,17 @@
                                 th:value="${option.value()}"
                                 th:text="${option.group() + ' — ' + option.label()}"
                                 th:selected="${location == option.value()}">
+                        </option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="period">Reporting period</label>
+                    <select id="period" name="period" required>
+                        <option th:each="option : ${reportPeriodOptions}"
+                                th:value="${option.value()}"
+                                th:text="${option.label()}"
+                                th:selected="${period == option.value()}">
                         </option>
                     </select>
                 </div>
@@ -210,7 +221,7 @@
 
                 <div class="actions">
                     <button type="submit">Show results</button>
-                    <button type="button" class="secondary" onclick="window.location.href='/'">Clear</button>
+                    <button type="button" class="secondary" onclick="window.location.href='/?period=2006-2010&amp;location=state&amp;race=all'">Clear</button>
                 </div>
             </div>
         </form>
@@ -225,7 +236,9 @@
         <p class="section-note muted">
             Showing <strong th:text="${citySearch.matchedPlace().displayLocation()}">City</strong>
             in <strong th:text="${citySearch.countyName() + ' County'}">County</strong>
-            (<span th:text="${citySearch.regionName()}">Region</span>), compared with other communities in the same county.
+            (<span th:text="${citySearch.regionName()}">Region</span>) for
+            <strong th:text="${selectedPeriodLabel}">Period</strong>,
+            compared with other communities in the same county.
         </p>
 
         <table>
@@ -276,7 +289,11 @@
 
     <section class="panel">
         <h2>Ranked results</h2>
-        <p class="muted section-note">Sorted from highest to lowest college-degree rate for your selected filters.</p>
+        <p class="muted section-note">
+            Sorted from highest to lowest college-degree rate for
+            <strong th:text="${selectedPeriodLabel}">Period</strong>.
+            All rows use the same reporting period so comparisons stay fair.
+        </p>
         <p class="muted" th:if="${results.isEmpty()}">No matches were found. Try a broader area such as a full county or choose "All races".</p>
 
         <table th:if="${!results.isEmpty()}">
