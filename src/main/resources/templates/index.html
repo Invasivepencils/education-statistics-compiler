@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Education Data Explorer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
+        .page { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem 3rem; }
+        .hero { background: linear-gradient(135deg, #0f4c81, #2563eb); color: white; padding: 2rem; border-radius: 16px; }
+        .panel { background: white; border-radius: 14px; padding: 1.25rem; margin-top: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        form { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+        select, input[type="text"] { flex: 1; min-width: 180px; padding: 0.8rem; border-radius: 8px; border: 1px solid #cbd5e1; }
+        button { padding: 0.8rem 1rem; border: none; background: #0f766e; color: white; border-radius: 8px; cursor: pointer; }
+        .badge { display: inline-block; padding: 0.25rem 0.6rem; border-radius: 999px; background: #ecfeff; color: #0f766e; font-size: 0.85rem; margin-left: 0.35rem; }
+        .muted { color: #64748b; }
+        .suggestions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+        .pill { background: #e2e8f0; padding: 0.4rem 0.7rem; border-radius: 999px; font-size: 0.95rem; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 0.75rem; border-bottom: 1px solid #e2e8f0; text-align: left; }
+        th { background: #f8fafc; }
+        .small { font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+<div class="page">
+    <section class="hero">
+        <h1>Education Data Explorer</h1>
+        <p>This simple website helps you search the included CSV file for education statistics in plain language. It is designed for everyday users who want to understand what the data means without needing to know technical terms.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Find the data you need</h2>
+        <p class="muted">Choose a general area, race, and whether you want the highest or lowest percentage rates.</p>
+        <form method="get" action="/">
+            <select name="scope">
+                <option value="state" th:selected="${scope == 'state'}">Whole state</option>
+                <option value="region" th:selected="${scope == 'region'}">Region</option>
+                <option value="county" th:selected="${scope == 'county'}">County</option>
+            </select>
+            <select name="location">
+                <option value="" th:selected="${location == ''}">Any location</option>
+                <option value="California" th:selected="${location == 'California'}">California</option>
+                <option value="Los Angeles" th:selected="${location == 'Los Angeles'}">Los Angeles</option>
+                <option value="San Diego" th:selected="${location == 'San Diego'}">San Diego</option>
+                <option value="Bay Area" th:selected="${location == 'Bay Area'}">Bay Area</option>
+                <option value="Fresno" th:selected="${location == 'Fresno'}">Fresno</option>
+            </select>
+            <select name="race">
+                <option value="all" th:selected="${race == 'all'}">All races</option>
+                <option value="african" th:selected="${race == 'african'}">African American</option>
+                <option value="asian" th:selected="${race == 'asian'}">Asian</option>
+                <option value="latino" th:selected="${race == 'latino'}">Latino</option>
+                <option value="white" th:selected="${race == 'white'}">White</option>
+            </select>
+            <select name="sortOrder">
+                <option value="highest" th:selected="${sortOrder == 'highest'}">Highest rates</option>
+                <option value="lowest" th:selected="${sortOrder == 'lowest'}">Lowest rates</option>
+            </select>
+            <button type="submit">Apply</button>
+        </form>
+        <div class="suggestions">
+            <span class="pill" th:each="tip : ${guidance}">[[${tip}]]</span>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>What the results mean</h2>
+        <p class="muted" th:text="${indicatorSummary}">Each result shows a location and an estimate for the share of adults age 25 and up with a four-year degree or higher.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Results</h2>
+        <p class="muted" th:if="${results.isEmpty()}">No matches were found. Try a broader search such as a county name or a race group.</p>
+        <table th:if="${!results.isEmpty()}">
+            <thead>
+            <tr>
+                <th>Place</th>
+                <th>Race / group</th>
+                <th>Estimate</th>
+                <th>Year</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="row : ${results}">
+                <td>
+                    <strong th:text="${row.geoname()}">Name</strong><br/>
+                    <span class="small" th:text="${row.countyName()}">County</span>
+                </td>
+                <td th:text="${row.raceEthName()}">Race</td>
+                <td>
+                    <span th:if="${row.estimate() != null && !#strings.isEmpty(row.estimate()) && !#strings.equalsIgnoreCase(row.estimate(), 'NA') && !#strings.equalsIgnoreCase(row.estimate(), 'N/A')}" th:text="${row.estimate() + '%'}">Estimate</span>
+                    <span class="badge" th:unless="${row.estimate() != null && !#strings.isEmpty(row.estimate()) && !#strings.equalsIgnoreCase(row.estimate(), 'NA') && !#strings.equalsIgnoreCase(row.estimate(), 'N/A')}">No meaningful estimate</span>
+                </td>
+                <td th:text="${row.reportYear()}">Year</td>
+            </tr>
+            </tbody>
+        </table>
+    </section>
+</div>
+</body>
+</html>
