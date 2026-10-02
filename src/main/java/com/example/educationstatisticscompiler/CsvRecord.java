@@ -2,13 +2,15 @@ package com.example.educationstatisticscompiler;
 
 public record CsvRecord(
         String indicator,
-        int reportYear,
+        String reportYear,
         String raceEthName,
         String geotype,
         String geotypeValue,
         String geoname,
         String countyName,
+        String countyFips,
         String regionName,
+        String regionCode,
         String estimate,
         String numerator,
         String denominator,

@@ -9,10 +9,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -20,12 +23,45 @@ import org.springframework.stereotype.Service;
 @Service
 public class CsvDataService {
 
+    private static final Map<String, String> GEOTYPE_LABELS = Map.of(
+            "CA", "State",
+            "RE", "Region",
+            "CO", "County",
+            "PL", "City or community",
+            "CT", "Census tract",
+            "CD", "County subdivision"
+    );
+
+    private static final Map<String, String> REGION_CODE_NAMES = Map.ofEntries(
+            Map.entry("01", "Bay Area"),
+            Map.entry("02", "Butte"),
+            Map.entry("03", "Central/Southeast Sierra"),
+            Map.entry("04", "Monterey Bay"),
+            Map.entry("05", "North Coast"),
+            Map.entry("06", "Northeast Sierra"),
+            Map.entry("07", "Northern Sacramento Valley"),
+            Map.entry("08", "Sacramento Area"),
+            Map.entry("09", "San Diego"),
+            Map.entry("10", "San Joaquin Valley"),
+            Map.entry("11", "San Luis Obispo"),
+            Map.entry("12", "Santa Barbara"),
+            Map.entry("13", "Shasta"),
+            Map.entry("14", "Southern California")
+    );
+
+    private static final String DEFAULT_REPORT_PERIOD = "2011-2015";
+    private static final List<String> KNOWN_REPORT_PERIODS = List.of("2011-2015", "2006-2010", "2000");
+
     private final List<CsvRecord> records;
     private final Map<String, String> dictionaryDefinitions;
+    private final List<LocationOption> locationOptions;
+    private final List<ReportPeriodOption> reportPeriodOptions;
 
     public CsvDataService() {
         this.dictionaryDefinitions = loadDictionaryDefinitions();
         this.records = loadRecords();
+        this.locationOptions = buildLocationOptions();
+        this.reportPeriodOptions = buildReportPeriodOptions();
     }
 
     public List<CsvRecord> search(String query) {
@@ -39,7 +75,8 @@ public class CsvDataService {
                 .toArray(String[]::new);
         return records.stream()
                 .filter(record -> matchesQuery(record, terms))
-                .sorted((left, right) -> Integer.compare(scoreRecord(right, terms), scoreRecord(left, terms)))
+                .sorted(Comparator.comparingInt((CsvRecord record) -> scoreRecord(record, terms)).reversed()
+                        .thenComparing((CsvRecord record) -> estimateAsDouble(record), Comparator.reverseOrder()))
                 .limit(50)
                 .toList();
     }
@@ -53,30 +90,198 @@ public class CsvDataService {
                 .filter(this::hasMeaningfulEstimate)
                 .filter(record -> matchesPlaceFilter(record, normalizedPlace, normalizedCounty))
                 .filter(record -> matchesTopicFilter(record, normalizedTopic))
-                .sorted(Comparator.comparingInt((CsvRecord record) -> estimateValue(record.estimate())).reversed())
+                .sorted(byEstimateHighestFirst())
                 .limit(limit)
                 .toList();
     }
 
-    public List<CsvRecord> searchByFilters(String scope, String location, String race, String sortOrder, int limit) {
-        String normalizedScope = normalize(scope);
-        String normalizedLocation = normalize(location);
-        String normalizedRace = normalize(race);
-        String normalizedSort = normalize(sortOrder);
+    public List<ResultRow> searchByFilters(String location, String race, String period, int limit) {
+        return toResultRows(filterRecords(location, race, period, limit), null);
+    }
 
+    public List<CsvRecord> searchByFilters(String scope, String location, String race, String sortOrder, int limit) {
+        return filterRecords(resolveLegacyLocation(scope, location), race, DEFAULT_REPORT_PERIOD, limit);
+    }
+
+    private List<CsvRecord> filterRecords(String location, String race, String period, int limit) {
         return records.stream()
                 .filter(this::hasMeaningfulEstimate)
-                .filter(record -> matchesScopeFilter(record, normalizedScope, normalizedLocation))
-                .filter(record -> matchesRaceFilter(record, normalizedRace))
-                .sorted((left, right) -> {
-                    int leftValue = estimateValue(left.estimate());
-                    int rightValue = estimateValue(right.estimate());
-                    return normalizedSort != null && normalizedSort.contains("low")
-                            ? Integer.compare(leftValue, rightValue)
-                            : Integer.compare(rightValue, leftValue);
-                })
+                .filter(record -> matchesLocationFilter(record, location))
+                .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
+                .sorted(byEstimateHighestFirst())
                 .limit(limit)
                 .toList();
+    }
+
+    private String resolveLegacyLocation(String scope, String location) {
+        if (location == null || location.isBlank()) {
+            return "state";
+        }
+        String normalizedScope = normalize(scope);
+        if (normalizedScope != null && normalizedScope.contains("region")) {
+            return "region:" + location.trim();
+        }
+        if (normalizedScope != null && normalizedScope.contains("county")) {
+            return "county:" + location.trim();
+        }
+        if ("California".equalsIgnoreCase(location.trim())) {
+            return "state";
+        }
+        return location.contains(":") ? location : "county:" + location.trim();
+    }
+
+    public CitySearchResult searchByCity(String cityQuery, String race, String period, int nearbyLimit) {
+        String normalizedCity = normalize(cityQuery);
+        if (normalizedCity == null || normalizedCity.isBlank()) {
+            return CitySearchResult.empty();
+        }
+
+        List<CsvRecord> cityMatches = records.stream()
+                .filter(this::hasMeaningfulEstimate)
+                .filter(record -> "PL".equalsIgnoreCase(record.geotype()))
+                .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
+                .filter(record -> matchesCityName(record, normalizedCity))
+                .sorted(Comparator.comparingInt((CsvRecord record) -> cityMatchScore(record, normalizedCity)).reversed()
+                        .thenComparing((CsvRecord record) -> estimateAsDouble(record), Comparator.reverseOrder()))
+                .toList();
+
+        if (cityMatches.isEmpty()) {
+            return CitySearchResult.empty();
+        }
+
+        CsvRecord primary = cityMatches.getFirst();
+        String county = primary.countyName();
+
+        List<CsvRecord> nearby = records.stream()
+                .filter(this::hasMeaningfulEstimate)
+                .filter(record -> "PL".equalsIgnoreCase(record.geotype()))
+                .filter(record -> matchesRaceFilter(record, race))
+                .filter(record -> matchesReportPeriodFilter(record, period))
+                .filter(record -> !record.geotypeValue().equals(primary.geotypeValue()))
+                .filter(record -> county.equalsIgnoreCase(record.countyName()))
+                .sorted(byEstimateHighestFirst())
+                .limit(nearbyLimit)
+                .toList();
+
+        List<ResultRow> nearbyRows = new ArrayList<>();
+        for (int index = 0; index < nearby.size(); index++) {
+            nearbyRows.add(toResultRow(nearby.get(index), index + 2, false));
+        }
+
+        return new CitySearchResult(
+                toResultRow(primary, 1, true),
+                nearbyRows,
+                county,
+                primary.regionName(),
+                true
+        );
+    }
+
+    public List<LocationOption> getLocationOptions() {
+        return locationOptions;
+    }
+
+    public List<CsvRecord> explore(String query, String scope, String race, String period, String sort) {
+        String geotype = switch (scope == null ? "county" : scope) {
+            case "city" -> "PL";
+            case "region" -> "RE";
+            case "state" -> "CA";
+            default -> "CO";
+        };
+        String text = normalize(query == null ? "" : query).replaceAll("\\b(county|city|town)\\b", "").trim();
+        Comparator<CsvRecord> order = Comparator.comparingDouble(this::estimateAsDouble);
+        if (!"lowest".equals(sort)) order = order.reversed();
+        return records.stream().filter(this::hasMeaningfulEstimate)
+            .filter(r -> geotype.equals(r.geotype()))
+            .filter(r -> matchesRaceFilter(r, race))
+            .filter(r -> matchesReportPeriodFilter(r, period))
+            .filter(r -> text.isBlank() || Arrays.stream(text.split("\\s+")).allMatch(term ->
+                normalize(getDisplayLocation(r) + " " + safe(r.countyName()) + " " + safe(r.regionName())).contains(term)))
+            .sorted(order.thenComparing(this::getDisplayLocation)).toList();
+    }
+
+    public Double benchmark(String race, String period) {
+        return explore("", "state", race, period, "highest").stream()
+            .map(this::estimateAsDouble).findFirst().orElse(null);
+    }
+
+    public List<String> placeSuggestions() {
+        return records.stream().filter(r -> Set.of("CO", "PL", "RE").contains(r.geotype()))
+            .map(this::getDisplayLocation).distinct().sorted().toList();
+    }
+
+    public double rate(CsvRecord record) { return estimateAsDouble(record); }
+
+    public List<String> getRaceOptions() {
+        return List.of(
+                "all|All races",
+                "african|African American",
+                "asian|Asian",
+                "latino|Latino",
+                "white|White",
+                "aian|American Indian or Alaska Native",
+                "nhopi|Native Hawaiian or Pacific Islander"
+        );
+    }
+
+    public List<ReportPeriodOption> getReportPeriodOptions() {
+        return reportPeriodOptions;
+    }
+
+    public String getDefaultReportPeriod() {
+        return DEFAULT_REPORT_PERIOD;
+    }
+
+    public String formatReportPeriodLabel(String period) {
+        return switch (period) {
+            case "2000" -> "2000 (Decennial Census)";
+            case "2006-2010" -> "2006–2010 (ACS 5-year average)";
+            case "2011-2015" -> "2011–2015 (ACS 5-year average)";
+            default -> period;
+        };
+    }
+
+    public String getDisplayLocation(CsvRecord record) {
+        String geotype = safe(record.geotype());
+        String geoname = safe(record.geoname());
+        String county = safe(record.countyName());
+        String region = safe(record.regionName());
+
+        return switch (geotype) {
+            case "CA" -> "California";
+            case "RE" -> region.isBlank() ? resolveRegionName(geoname, record.regionCode()) : region;
+            case "CO" -> county.isBlank() ? geoname + " County" : county + " County";
+            case "PL" -> formatPlaceName(geoname);
+            case "CT" -> formatCensusTractName(geoname, county);
+            case "CD" -> geoname.isBlank() ? "County subdivision" : geoname;
+            default -> geoname.isBlank() ? "Unknown area" : geoname;
+        };
+    }
+
+    public String getDisplayContext(CsvRecord record) {
+        List<String> parts = new ArrayList<>();
+        String geotypeLabel = GEOTYPE_LABELS.getOrDefault(safe(record.geotype()).toUpperCase(Locale.ROOT), "Area");
+        parts.add(geotypeLabel);
+
+        if (!safe(record.countyName()).isBlank() && !"CO".equalsIgnoreCase(record.geotype())) {
+            parts.add(record.countyName() + " County");
+        }
+        if (!safe(record.regionName()).isBlank()) {
+            parts.add(record.regionName());
+        }
+        return String.join(" · ", parts);
+    }
+
+    public String getDisplayRaceName(CsvRecord record) {
+        return switch (safe(record.raceEthName())) {
+            case "AfricanAm" -> "African American";
+            case "AIAN" -> "American Indian or Alaska Native";
+            case "NHOPI" -> "Native Hawaiian or Pacific Islander";
+            case "Total" -> "All races (Total)";
+            default -> record.raceEthName();
+        };
     }
 
     public String getMeasureAvailability(String measure) {
@@ -95,10 +300,10 @@ public class CsvDataService {
 
     public List<String> getGuidanceSuggestions() {
         return List.of(
-                "Try: highest college-degree rates for Los Angeles",
-                "Try: lowest rates in the Bay Area",
-                "Try: Asian residents across California",
-                "Try: Latino rates by region"
+                "Pick one reporting period to compare areas fairly",
+                "Search by city: try Pomona, Fresno, or Oakland",
+                "Compare counties in the Bay Area region",
+                "View Latino education rates for 2011–2015"
         );
     }
 
@@ -107,7 +312,192 @@ public class CsvDataService {
         if (definition.isBlank()) {
             return "This dataset shows the share of adults age 25 and up with a four-year college degree or higher.";
         }
-        return definition + " This is a percentage-based measure, so higher values mean a larger share of adults in that place have a college degree.";
+        return definition + " Results are sorted from highest to lowest so you can quickly spot the strongest areas.";
+    }
+
+    private List<ResultRow> toResultRows(List<CsvRecord> filtered, String highlightedGeotypeValue) {
+        List<ResultRow> rows = new ArrayList<>();
+        for (int index = 0; index < filtered.size(); index++) {
+            CsvRecord record = filtered.get(index);
+            boolean highlighted = highlightedGeotypeValue != null
+                    && highlightedGeotypeValue.equals(record.geotypeValue());
+            rows.add(toResultRow(record, index + 1, highlighted));
+        }
+        return rows;
+    }
+
+    private ResultRow toResultRow(CsvRecord record, int rank, boolean highlighted) {
+        return new ResultRow(
+                getDisplayLocation(record),
+                getDisplayContext(record),
+                getDisplayRaceName(record),
+                record.estimate(),
+                record.reportYear(),
+                rank,
+                highlighted
+        );
+    }
+
+    private List<LocationOption> buildLocationOptions() {
+        List<LocationOption> options = new ArrayList<>();
+        options.add(new LocationOption("state", "All of California (by county)", "Overview"));
+
+        Set<String> regions = records.stream()
+                .map(CsvRecord::regionName)
+                .filter(name -> name != null && !name.isBlank() && !name.equalsIgnoreCase("NA"))
+                .collect(Collectors.toCollection(() -> new TreeSet<>(String.CASE_INSENSITIVE_ORDER)));
+
+        for (String region : regions) {
+            options.add(new LocationOption("region:" + region, region, "Regions"));
+        }
+
+        Set<String> counties = records.stream()
+                .map(CsvRecord::countyName)
+                .filter(name -> name != null && !name.isBlank() && !name.equalsIgnoreCase("NA"))
+                .collect(Collectors.toCollection(() -> new TreeSet<>(String.CASE_INSENSITIVE_ORDER)));
+
+        for (String county : counties) {
+            options.add(new LocationOption("county:" + county, county + " County (cities & communities)", "Counties"));
+        }
+
+        return options;
+    }
+
+    private List<ReportPeriodOption> buildReportPeriodOptions() {
+        LinkedHashSet<String> periods = new LinkedHashSet<>(KNOWN_REPORT_PERIODS);
+        records.stream()
+                .map(CsvRecord::reportYear)
+                .filter(year -> year != null && !year.isBlank() && !year.equalsIgnoreCase("NA"))
+                .forEach(periods::add);
+
+        return periods.stream()
+                .sorted(Comparator.reverseOrder())
+                .map(period -> new ReportPeriodOption(period, formatReportPeriodLabel(period)))
+                .toList();
+    }
+
+    private boolean matchesReportPeriodFilter(CsvRecord record, String period) {
+        String effectivePeriod = (period == null || period.isBlank()) ? DEFAULT_REPORT_PERIOD : period.trim();
+        return effectivePeriod.equalsIgnoreCase(safe(record.reportYear()));
+    }
+
+    private boolean matchesLocationFilter(CsvRecord record, String location) {
+        if (location == null || location.isBlank() || location.equalsIgnoreCase("state")) {
+            return "CO".equalsIgnoreCase(record.geotype());
+        }
+
+        if (location.startsWith("region:")) {
+            String region = location.substring("region:".length()).trim();
+            return "CO".equalsIgnoreCase(record.geotype())
+                    && safe(record.regionName()).equalsIgnoreCase(region);
+        }
+
+        if (location.startsWith("county:")) {
+            String county = location.substring("county:".length()).trim();
+            return "PL".equalsIgnoreCase(record.geotype())
+                    && safe(record.countyName()).equalsIgnoreCase(county);
+        }
+
+        String normalizedLocation = normalize(location);
+        String searchableLocation = String.join(" ",
+                getDisplayLocation(record),
+                record.countyName(),
+                record.regionName()
+        ).toLowerCase(Locale.ROOT);
+        return searchableLocation.contains(normalizedLocation);
+    }
+
+    private boolean matchesRaceFilter(CsvRecord record, String race) {
+        String normalizedRace = normalize(race);
+        if (normalizedRace == null || normalizedRace.isBlank() || normalizedRace.contains("all")) {
+            return "Total".equalsIgnoreCase(record.raceEthName());
+        }
+
+        String searchableRace = record.raceEthName().toLowerCase(Locale.ROOT);
+        return switch (normalizedRace) {
+            case "african", "black", "africanam" -> searchableRace.contains("african");
+            case "latino", "hispanic" -> searchableRace.contains("latino");
+            case "asian" -> searchableRace.contains("asian");
+            case "white" -> searchableRace.contains("white");
+            case "aian", "native", "indian" -> searchableRace.contains("aian") || searchableRace.contains("indian");
+            case "nhopi", "pacific" -> searchableRace.contains("nhopi") || searchableRace.contains("pacific");
+            default -> searchableRace.contains(normalizedRace);
+        };
+    }
+
+    private boolean matchesCityName(CsvRecord record, String normalizedCity) {
+        String placeName = normalizePlaceName(record.geoname());
+        if (placeName.contains(normalizedCity) || normalizedCity.contains(placeName)) {
+            return true;
+        }
+
+        String[] queryParts = normalizedCity.split("\\s+");
+        return Arrays.stream(queryParts)
+                .filter(part -> part.length() > 2)
+                .allMatch(placeName::contains);
+    }
+
+    private int cityMatchScore(CsvRecord record, String normalizedCity) {
+        String placeName = normalizePlaceName(record.geoname());
+        if (placeName.equals(normalizedCity)) {
+            return 100;
+        }
+        if (placeName.startsWith(normalizedCity)) {
+            return 80;
+        }
+        if (placeName.contains(normalizedCity)) {
+            return 60;
+        }
+        return 10;
+    }
+
+    private String formatPlaceName(String geoname) {
+        if (geoname.isBlank()) {
+            return "Unknown city or community";
+        }
+        return geoname.replace(" CDP", " (community)")
+                .replace(" city", " (city)")
+                .replace(" town", " (town)");
+    }
+
+    private String formatCensusTractName(String tractNumber, String county) {
+        String tractLabel = tractNumber.isBlank() ? "Unknown census tract" : "Census Tract " + tractNumber;
+        if (county.isBlank()) {
+            return tractLabel;
+        }
+        return tractLabel + ", " + county + " County";
+    }
+
+    private String resolveRegionName(String geoname, String regionCode) {
+        if (!geoname.isBlank()) {
+            return geoname;
+        }
+        return REGION_CODE_NAMES.getOrDefault(safe(regionCode), "Unknown region");
+    }
+
+    private String normalizePlaceName(String geoname) {
+        return normalize(geoname)
+                .replace(" cdp", "")
+                .replace(" city", "")
+                .replace(" town", "")
+                .trim();
+    }
+
+    private Comparator<CsvRecord> byEstimateHighestFirst() {
+        return Comparator.comparingDouble((CsvRecord record) -> estimateAsDouble(record)).reversed();
+    }
+
+    private double estimateAsDouble(CsvRecord record) {
+        return estimateAsDouble(record.estimate());
+    }
+
+    private double estimateAsDouble(String value) {
+        try {
+            String normalized = value == null ? "0" : value.replace("%", "").trim();
+            return Double.parseDouble(normalized);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private boolean matchesQuery(CsvRecord record, String[] terms) {
@@ -115,16 +505,7 @@ public class CsvDataService {
             return true;
         }
 
-        String searchable = String.join(" ",
-                record.indicator(),
-                record.raceEthName(),
-                record.geotype(),
-                record.geoname(),
-                record.countyName(),
-                record.regionName(),
-                record.estimate(),
-                record.geotypeValue()
-        ).toLowerCase(Locale.ROOT);
+        String searchable = buildSearchableText(record).toLowerCase(Locale.ROOT);
 
         boolean raceMatch = false;
         boolean locationMatch = false;
@@ -142,16 +523,7 @@ public class CsvDataService {
     }
 
     private int scoreRecord(CsvRecord record, String[] terms) {
-        String searchable = String.join(" ",
-                record.indicator(),
-                record.raceEthName(),
-                record.geotype(),
-                record.geoname(),
-                record.countyName(),
-                record.regionName(),
-                record.estimate(),
-                record.geotypeValue()
-        ).toLowerCase(Locale.ROOT);
+        String searchable = buildSearchableText(record).toLowerCase(Locale.ROOT);
 
         int score = 0;
         for (String term : terms) {
@@ -171,13 +543,30 @@ public class CsvDataService {
         return score;
     }
 
+    private String buildSearchableText(CsvRecord record) {
+        return String.join(" ",
+                record.indicator(),
+                record.raceEthName(),
+                getDisplayRaceName(record),
+                getDisplayLocation(record),
+                getDisplayContext(record),
+                record.countyName(),
+                record.regionName(),
+                record.estimate(),
+                record.reportYear()
+        );
+    }
+
     private boolean hasMeaningfulEstimate(CsvRecord record) {
         String estimate = record.estimate();
         if (estimate == null || estimate.isBlank()) {
             return false;
         }
         String normalizedEstimate = estimate.trim();
-        return !normalizedEstimate.equalsIgnoreCase("NA") && !normalizedEstimate.equalsIgnoreCase("N/A") && !normalizedEstimate.equalsIgnoreCase("null");
+        try {
+            double value = Double.parseDouble(normalizedEstimate);
+            return Double.isFinite(value) && value >= 0 && value <= 100;
+        } catch (NumberFormatException invalid) { return false; }
     }
 
     private boolean matchesPlaceFilter(CsvRecord record, String place, String county) {
@@ -185,36 +574,11 @@ public class CsvDataService {
             return true;
         }
 
-        String searchableLocation = String.join(" ",
-                record.geoname(),
-                record.countyName(),
-                record.regionName(),
-                record.geotypeValue()
-        ).toLowerCase(Locale.ROOT);
+        String searchableLocation = buildSearchableText(record).toLowerCase(Locale.ROOT);
 
         boolean placeMatch = place != null && !place.isBlank() && searchableLocation.contains(place);
         boolean countyMatch = county != null && !county.isBlank() && searchableLocation.contains(county);
         return placeMatch || countyMatch;
-    }
-
-    private boolean matchesScopeFilter(CsvRecord record, String scope, String location) {
-        if (location == null || location.isBlank()) {
-            return scope == null || scope.isBlank() || scope.contains("all") || scope.contains("state");
-        }
-
-        String searchableLocation = String.join(" ", record.geoname(), record.countyName(), record.regionName(), record.geotypeValue()).toLowerCase(Locale.ROOT);
-        if (scope != null && scope.contains("region")) {
-            return searchableLocation.contains(location) || record.regionName().toLowerCase(Locale.ROOT).contains(location);
-        }
-        return searchableLocation.contains(location);
-    }
-
-    private boolean matchesRaceFilter(CsvRecord record, String race) {
-        if (race == null || race.isBlank() || race.contains("all")) {
-            return true;
-        }
-        String searchableRace = record.raceEthName().toLowerCase(Locale.ROOT);
-        return searchableRace.contains(race);
     }
 
     private boolean matchesTopicFilter(CsvRecord record, String topic) {
@@ -226,8 +590,7 @@ public class CsvDataService {
     }
 
     private boolean containsLocationField(String term, CsvRecord record) {
-        String location = String.join(" ", record.geoname(), record.countyName(), record.regionName(), record.geotypeValue()).toLowerCase(Locale.ROOT);
-        return location.contains(term);
+        return buildSearchableText(record).toLowerCase(Locale.ROOT).contains(term);
     }
 
     private boolean looksLikeLocationTerm(String term) {
@@ -259,6 +622,13 @@ public class CsvDataService {
         return Set.of("in", "the", "and", "for", "with", "of", "a", "an").contains(term);
     }
 
+    private String safe(String value) {
+        if (value == null || value.isBlank() || value.equalsIgnoreCase("NA")) {
+            return "";
+        }
+        return value.trim();
+    }
+
     private Map<String, String> loadDictionaryDefinitions() {
         Map<String, String> definitions = new HashMap<>();
         try {
@@ -276,8 +646,11 @@ public class CsvDataService {
                         continue;
                     }
                     String[] parts = splitCsvLine(line);
-                    if (parts.length >= 2) {
-                        definitions.put(parts[0].trim(), parts[1].trim());
+                    if (parts.length >= 2 && !parts[0].trim().startsWith("NOTE")) {
+                        String value = parts.length >= 4 && !parts[3].trim().isBlank()
+                                ? parts[3].trim()
+                                : parts[1].trim();
+                        definitions.put(parts[0].trim(), value);
                     }
                 }
             }
@@ -312,15 +685,20 @@ public class CsvDataService {
                     if (parts.length < 12) {
                         continue;
                     }
+                    if (!isAggregateCsvRow(parts, headerIndexes)) {
+                        continue;
+                    }
                     loaded.add(new CsvRecord(
                             getValue(parts, headerIndexes, "ind_definition"),
-                            parseYear(getValue(parts, headerIndexes, "reportyear")),
+                            getValue(parts, headerIndexes, "reportyear"),
                             getValue(parts, headerIndexes, "race_eth_name"),
                             getValue(parts, headerIndexes, "geotype"),
                             getValue(parts, headerIndexes, "geotypevalue"),
                             getValue(parts, headerIndexes, "geoname"),
                             getValue(parts, headerIndexes, "county_name"),
+                            getValue(parts, headerIndexes, "county_fips"),
                             getValue(parts, headerIndexes, "region_name"),
+                            getValue(parts, headerIndexes, "region_code"),
                             getValue(parts, headerIndexes, "estimate"),
                             getValue(parts, headerIndexes, "numerator"),
                             getValue(parts, headerIndexes, "denominator"),
@@ -334,11 +712,21 @@ public class CsvDataService {
         return loaded;
     }
 
+    private boolean isAggregateCsvRow(String[] parts, Map<String, Integer> headerIndexes) {
+        String strataOne = getValue(parts, headerIndexes, "strata_one_code");
+        String strataTwo = getValue(parts, headerIndexes, "strata_two_code");
+        return isMissing(strataOne) && isMissing(strataTwo);
+    }
+
+    private boolean isMissing(String value) {
+        return value == null || value.isBlank() || value.equalsIgnoreCase("NA");
+    }
+
     private String normalize(String input) {
         if (input == null) {
             return null;
         }
-        return input.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\s]", " ").trim();
+        return input.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
     }
 
     private String normalizeHeader(String value) {
@@ -351,23 +739,6 @@ public class CsvDataService {
             return "";
         }
         return parts[index].trim();
-    }
-
-    private int parseYear(String value) {
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
-    }
-
-    private int estimateValue(String value) {
-        try {
-            String normalized = value == null ? "0" : value.replace("%", "").trim();
-            return (int) Double.parseDouble(normalized);
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
     }
 
     private String[] splitCsvLine(String line) {
