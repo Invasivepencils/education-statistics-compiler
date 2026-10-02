@@ -1,4 +1,4 @@
-let data=[], results=[], page=1;
+let data=[], results=[], page=1, exportURL;
 const form=document.querySelector('#filters'), tbody=document.querySelector('tbody');
 const title=document.querySelector('#result-title'), panel=document.querySelector('#comparison');
 const context=[...document.querySelectorAll('.context strong')];
@@ -37,7 +37,12 @@ function render(){
   pagination.replaceChildren();const label=document.createElement('span');label.textContent=`Page ${page} of ${pages} · 25 areas per page`;pagination.append(label);
   for(const [text,delta] of [['← Previous',-1],['Next →',1]]){const b=document.createElement('button');b.type='button';b.textContent=text;b.disabled=page+delta<1||page+delta>pages;b.addEventListener('click',()=>{page+=delta;render();});pagination.append(b);}
   download.setAttribute('aria-disabled',String(!results.length));
+  if(exportURL)URL.revokeObjectURL(exportURL);
+  const escape=x=>'"'+String(x).replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';
+  const csvRows=[['place','geographic_level','group','reporting_period','attainment_percent','numerator','denominator'],...results.map(r=>[place(r),r[2],group(r),r[0],r[6],r[7],r[8]])];
+  exportURL=URL.createObjectURL(new Blob([csvRows.map(r=>r.map(escape).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
+  download.href=exportURL;download.download='attainment.csv';
 }
 form.addEventListener('submit',e=>{e.preventDefault();page=1;const p=new URLSearchParams(new FormData(form));history.replaceState(null,'','?'+p);render();});
-download.addEventListener('click',e=>{e.preventDefault();if(!results.length)return;const escape=x=>'"'+String(x).replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';const rows=[['place','geographic_level','group','reporting_period','attainment_percent','numerator','denominator'],...results.map(r=>[place(r),r[2],group(r),r[0],r[6],r[7],r[8]])];const url=URL.createObjectURL(new Blob([rows.map(r=>r.map(escape).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='attainment.csv';a.click();URL.revokeObjectURL(url);});
+download.addEventListener('click',e=>{if(!results.length)e.preventDefault();});
 fetch('data.json').then(r=>{if(!r.ok)throw Error('The snapshot could not load. Reload or open the source repository.');return r.json();}).then(d=>{data=d;render();}).catch(e=>{title.textContent='Snapshot unavailable';const note=document.createElement('p');note.setAttribute('role','alert');note.textContent=e.message;title.after(note);});
