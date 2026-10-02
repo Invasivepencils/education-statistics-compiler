@@ -1,5 +1,8 @@
 # Attainment Atlas
 
+**[Open the browser demo →](https://invasivepencils.github.io/education-statistics-compiler/)** · No installation or sign-in required.
+
+
 **How does college-degree attainment differ across California communities?**
 
 A Spring Boot research app that turns the California Department of Public Health's educational-attainment snapshot into searchable, comparable evidence. Built for civic researchers exploring geographic and demographic patterns among adults age 25 and older.
