@@ -41,3 +41,7 @@ Sources: [CDPH dataset catalog](https://catalog.data.gov/dataset/educational-att
 ## Engineering
 
 Java / Spring Boot / Thymeleaf, with lightweight CSS and JavaScript. Filtering runs on the server; URLs preserve research queries, and CSV export uses the same filter pipeline. Regression tests cover geography, historical periods, query narrowing, and decimal ranking.
+
+## Beginner-friendly comparisons
+
+The GitHub Pages site explains rates as adults per 100 and marks the latest period as historical (2011–2015). Choose any two filtered areas using labeled selectors or table checkboxes; selections persist across result pages. Changing filters clears the comparison to keep population groups and periods consistent. Comparisons spell out the direction and percentage-point difference. The Spring Boot interface also adds plain-language rates, historical labeling, and comparison guidance.
